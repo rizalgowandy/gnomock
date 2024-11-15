@@ -2,6 +2,7 @@ package gnomock
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -14,8 +15,11 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
+	dockerimage "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 	"github.com/orlangure/gnomock/internal/cleaner"
 	"github.com/orlangure/gnomock/internal/health"
@@ -24,7 +28,7 @@ import (
 
 const (
 	localhostAddr             = "127.0.0.1"
-	defaultStopTimeout        = time.Second * 1
+	defaultStopTimeoutSec     = 1
 	duplicateContainerPattern = `Conflict. The container name "(?:.+?)" is already in use by container "(\w+)". You have to remove \(or rename\) that container to be able to reuse that name.` // nolint:lll
 	dockerSockAddr            = "/var/run/docker.sock"
 )
@@ -52,7 +56,7 @@ func (g *g) dockerConnect() (*docker, error) {
 
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s", ErrEnvClient, err)
+		return nil, errors.Join(ErrEnvClient, err)
 	}
 
 	g.log.Info("connected to docker engine")
@@ -61,13 +65,17 @@ func (g *g) dockerConnect() (*docker, error) {
 }
 
 func (d *docker) isExistingLocalImage(ctx context.Context, image string) (bool, error) {
-	images, err := d.client.ImageList(ctx, types.ImageListOptions{All: true})
+	images, err := d.client.ImageList(ctx, dockerimage.ListOptions{All: true})
 	if err != nil {
 		return false, fmt.Errorf("can't list image: %w", err)
 	}
 
 	for _, img := range images {
 		for _, repoTag := range img.RepoTags {
+			if image == repoTag {
+				return true, nil
+			}
+
 			if !strings.Contains(repoTag, "/") {
 				repoTag = "library/" + repoTag
 			}
@@ -84,7 +92,7 @@ func (d *docker) isExistingLocalImage(ctx context.Context, image string) (bool, 
 func (d *docker) pullImage(ctx context.Context, image string, cfg *Options) error {
 	d.log.Info("pulling image")
 
-	reader, err := d.client.ImagePull(ctx, image, types.ImagePullOptions{
+	reader, err := d.client.ImagePull(ctx, image, dockerimage.PullOptions{
 		RegistryAuth: cfg.Auth,
 	})
 	if err != nil {
@@ -110,6 +118,18 @@ func (d *docker) pullImage(ctx context.Context, image string, cfg *Options) erro
 }
 
 func (d *docker) startContainer(ctx context.Context, image string, ports NamedPorts, cfg *Options) (*Container, error) {
+	if cfg.Reuse {
+		container, ok, err := d.findReusableContainer(ctx, image, ports, cfg)
+		if err != nil {
+			return nil, err
+		}
+
+		if ok {
+			d.log.Info("re-using container")
+			return container, nil
+		}
+	}
+
 	d.log.Info("starting container")
 
 	resp, err := d.prepareContainer(ctx, image, ports, cfg)
@@ -117,12 +137,37 @@ func (d *docker) startContainer(ctx context.Context, image string, ports NamedPo
 		return nil, fmt.Errorf("can't prepare container: %w", err)
 	}
 
-	sidecarChan := make(chan string)
+	sidecarChan, cleanupCancel := d.setupContainerCleanup(resp.ID, cfg)
+
+	err = d.client.ContainerStart(ctx, resp.ID, container.StartOptions{})
+	if err != nil {
+		cleanupCancel()
+		return nil, fmt.Errorf("can't start container %s: %w", resp.ID, err)
+	}
+
+	container, err := d.waitForContainerNetwork(ctx, resp.ID, ports)
+	if err != nil {
+		cleanupCancel()
+		return nil, fmt.Errorf("container network isn't ready: %w", err)
+	}
+
+	if sidecar, ok := <-sidecarChan; ok {
+		container.ID = generateID(container.ID, sidecar)
+	}
+
+	d.log.Infow("container started", "container", container)
+
+	return container, nil
+}
+
+func (d *docker) setupContainerCleanup(id string, cfg *Options) (chan string, context.CancelFunc) {
+	sidecarChan := make(chan string, 1)
+	bctx, bcancel := context.WithCancel(context.Background())
 
 	go func() {
 		defer close(sidecarChan)
 
-		if cfg.DisableAutoCleanup || cfg.Debug {
+		if cfg.DisableAutoCleanup || cfg.Reuse || cfg.Debug {
 			return
 		}
 
@@ -132,9 +177,10 @@ func (d *docker) startContainer(ctx context.Context, image string, ports NamedPo
 			WithHealthCheck(func(ctx context.Context, c *Container) error {
 				return health.HTTPGet(ctx, c.DefaultAddress())
 			}),
-			WithInit(func(ctx context.Context, c *Container) error {
-				return cleaner.Notify(context.Background(), c.DefaultAddress(), resp.ID)
+			WithInit(func(_ context.Context, c *Container) error {
+				return cleaner.Notify(bctx, c.DefaultAddress(), id)
 			}),
+			WithContext(bctx),
 		}
 		if cfg.UseLocalImagesFirst {
 			opts = append(opts, WithUseLocalImagesFirst())
@@ -148,23 +194,7 @@ func (d *docker) startContainer(ctx context.Context, image string, ports NamedPo
 		}
 	}()
 
-	err = d.client.ContainerStart(ctx, resp.ID, types.ContainerStartOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("can't start container %s: %w", resp.ID, err)
-	}
-
-	container, err := d.waitForContainerNetwork(ctx, resp.ID, ports)
-	if err != nil {
-		return nil, fmt.Errorf("container network isn't ready: %w", err)
-	}
-
-	if sidecar, ok := <-sidecarChan; ok {
-		container.ID = generateID(container.ID, sidecar)
-	}
-
-	d.log.Infow("container started", "container", container)
-
-	return container, nil
+	return sidecarChan, bcancel
 }
 
 func (d *docker) prepareContainer(
@@ -172,7 +202,7 @@ func (d *docker) prepareContainer(
 	image string,
 	ports NamedPorts,
 	cfg *Options,
-) (*container.ContainerCreateCreatedBody, error) {
+) (*container.CreateResponse, error) {
 	pullImage := true
 
 	if cfg.UseLocalImagesFirst {
@@ -275,7 +305,12 @@ func (d *docker) portBindings(exposedPorts nat.PortSet, ports NamedPorts) nat.Po
 	return portBindings
 }
 
-func (d *docker) createContainer(ctx context.Context, image string, ports NamedPorts, cfg *Options) (*container.ContainerCreateCreatedBody, error) { // nolint:lll
+func (d *docker) createContainer(
+	ctx context.Context,
+	image string,
+	ports NamedPorts,
+	cfg *Options,
+) (*container.CreateResponse, error) {
 	exposedPorts := d.exposedPorts(ports)
 	containerConfig := &container.Config{
 		Image:        image,
@@ -285,6 +320,10 @@ func (d *docker) createContainer(ctx context.Context, image string, ports NamedP
 
 	if len(cfg.Cmd) > 0 {
 		containerConfig.Cmd = cfg.Cmd
+	}
+
+	if len(cfg.Entrypoint) > 0 {
+		containerConfig.Entrypoint = cfg.Entrypoint
 	}
 
 	mounts := []mount.Mount{}
@@ -299,9 +338,10 @@ func (d *docker) createContainer(ctx context.Context, image string, ports NamedP
 	portBindings := d.portBindings(exposedPorts, ports)
 	hostConfig := &container.HostConfig{
 		PortBindings: portBindings,
-		AutoRemove:   true,
+		AutoRemove:   !cfg.Debug,
 		Privileged:   cfg.Privileged,
 		Mounts:       mounts,
+		ExtraHosts:   cfg.ExtraHosts,
 	}
 
 	resp, err := d.client.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, cfg.ContainerName)
@@ -313,7 +353,7 @@ func (d *docker) createContainer(ctx context.Context, image string, ports NamedP
 	if len(matches) == 2 {
 		d.log.Infow("duplicate container found, stopping", "container", matches[1])
 
-		err = d.client.ContainerRemove(ctx, matches[1], types.ContainerRemoveOptions{
+		err = d.client.ContainerRemove(ctx, matches[1], container.RemoveOptions{
 			Force: true,
 		})
 		if err != nil {
@@ -324,6 +364,35 @@ func (d *docker) createContainer(ctx context.Context, image string, ports NamedP
 	}
 
 	return &resp, err
+}
+
+func (d *docker) findReusableContainer(
+	ctx context.Context,
+	image string,
+	ports NamedPorts,
+	cfg *Options,
+) (*Container, bool, error) {
+	if cfg.ContainerName == "" {
+		return nil, false, fmt.Errorf("container name is required when container reuse is enabled")
+	}
+
+	list, err := d.client.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("name", cfg.ContainerName),
+			filters.Arg("ancestor", image),
+			filters.Arg("status", "running"),
+		),
+	})
+	if err != nil || len(list) < 1 {
+		return nil, false, err
+	}
+
+	container, err := d.waitForContainerNetwork(ctx, list[0].ID, ports)
+	if err != nil {
+		return nil, false, err
+	}
+
+	return container, true, nil
 }
 
 func (d *docker) boundNamedPorts(json types.ContainerJSON, namedPorts NamedPorts) (NamedPorts, error) {
@@ -358,7 +427,7 @@ func (d *docker) boundNamedPorts(json types.ContainerJSON, namedPorts NamedPorts
 func (d *docker) readLogs(ctx context.Context, id string) (io.ReadCloser, error) {
 	d.log.Info("starting container logs forwarder")
 
-	logsOptions := types.ContainerLogsOptions{
+	logsOptions := container.LogsOptions{
 		ShowStderr: true, ShowStdout: true, Follow: true,
 	}
 
@@ -376,11 +445,29 @@ func (d *docker) stopContainer(ctx context.Context, id string) error {
 	d.lock.Lock()
 	defer d.lock.Unlock()
 
-	stopTimeout := defaultStopTimeout
+	stopTimeout := defaultStopTimeoutSec
 
-	err := d.client.ContainerStop(ctx, id, &stopTimeout)
-	if err != nil {
+	err := d.client.ContainerStop(ctx, id, container.StopOptions{
+		Timeout: &stopTimeout,
+	})
+	if err != nil && !client.IsErrNotFound(err) {
 		return fmt.Errorf("can't stop container %s: %w", id, err)
+	}
+
+	return nil
+}
+
+func (d *docker) stopClient() error {
+	return d.client.Close()
+}
+
+func (d *docker) removeContainer(ctx context.Context, id string) error {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+
+	err := d.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true})
+	if err != nil && !client.IsErrNotFound(err) && !isDeletionAlreadyInProgessError(err, id) {
+		return fmt.Errorf("can't remove container %s: %w", id, err)
 	}
 
 	return nil
@@ -400,4 +487,15 @@ func (d *docker) hostAddr() string {
 	}
 
 	return localhostAddr
+}
+
+func isDeletionAlreadyInProgessError(err error, id string) bool {
+	var e errdefs.ErrConflict
+	if errors.As(err, &e) {
+		if err.Error() == fmt.Sprintf("Error response from daemon: removal of container %s is already in progress", id) {
+			return true
+		}
+	}
+
+	return false
 }

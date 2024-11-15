@@ -1,19 +1,14 @@
 linters:
   enable:
     - bodyclose
-    - cyclop
-    - deadcode
-    - depguard
     - dogsled
     - errcheck
     - exportloopref
     - forcetypeassert
-    - funlen
     - errorlint
     - gocognit
     - goconst
     - gocritic
-    - gocyclo
     - godot
     - godox
     - gofmt
@@ -23,7 +18,6 @@ linters:
     - gosec
     - gosimple
     - govet
-    - ifshort
     - ineffassign
     - lll
     - misspell
@@ -33,25 +27,21 @@ linters:
     - prealloc
     - predeclared
     - revive
-    - rowserrcheck
-    - sqlclosecheck
     - staticcheck
-    - structcheck
     - stylecheck
     - typecheck
     - unconvert
     - unparam
     - unused
-    - varcheck
-    - wastedassign
     - whitespace
     - wsl
 
 issues:
+  include:
+    - EXC0001 # require error check on Close()
   exclude-rules:
     - path: _test\.go
       linters:
-        - funlen
         - bodyclose
         - gosec
         - noctx

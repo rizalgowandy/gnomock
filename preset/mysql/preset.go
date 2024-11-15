@@ -1,4 +1,11 @@
-// Package mysql provides a Gnomock Preset for MySQL database
+// Package mysql provides a Gnomock Preset for MySQL database.
+//
+// This preset uses different docker images for amd64 and arm64 architectures.
+// Even though the versions should be compatible, you should make sure that the
+// tag being used exists in the following repositories:
+//
+// amd64: https://hub.docker.com/_/mysql/
+// arm64: https://hub.docker.com/r/mysql/mysql-server
 package mysql
 
 import (
@@ -55,11 +62,6 @@ type P struct {
 	Version      string   `json:"version"`
 }
 
-// Image returns an image that should be pulled to create this container.
-func (p *P) Image() string {
-	return fmt.Sprintf("docker.io/library/mysql:%s", p.Version)
-}
-
 // Ports returns ports that should be used to access this container.
 func (p *P) Ports() gnomock.NamedPorts {
 	return gnomock.DefaultTCP(defaultPort)
@@ -86,11 +88,15 @@ func (p *P) Options() []gnomock.Option {
 	return opts
 }
 
-func (p *P) healthcheck(ctx context.Context, c *gnomock.Container) error {
+func (p *P) healthcheck(_ context.Context, c *gnomock.Container) error {
 	addr := c.Address(gnomock.DefaultPort)
 
 	db, err := p.connect(addr)
 	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+
 		return err
 	}
 
@@ -104,7 +110,7 @@ func (p *P) healthcheck(ctx context.Context, c *gnomock.Container) error {
 }
 
 func (p *P) initf() gnomock.InitFunc {
-	return func(ctx context.Context, c *gnomock.Container) error {
+	return func(_ context.Context, c *gnomock.Container) error {
 		addr := c.Address(gnomock.DefaultPort)
 
 		db, err := p.connect(addr)

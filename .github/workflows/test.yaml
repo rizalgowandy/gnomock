@@ -9,18 +9,15 @@ jobs:
     name: "[core] lint"
     runs-on: ubuntu-latest
     steps:
-      - name: Set up Go 1.17
-        uses: actions/setup-go@v1
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
-          go-version: 1.17
-      - name: Check out code into the Go module directory
-        uses: actions/checkout@v1
-      - name: Get dependencies
-        run: go get -v -t -d ./...
-      - name: Get golangci-lint
-        run: curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(go env GOPATH)/bin v1.39.0
-      - name: Lint
-        run: $(go env GOPATH)/bin/golangci-lint run --timeout 10m0s ./...
+          go-version: '1.21'
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.58.1
+          args: --timeout=10m
 
   test-core:
     name: "[core] gnomock, gnomockd"
@@ -32,10 +29,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -67,6 +64,10 @@ jobs:
         uses: arduino/setup-task@v1
         with:
           version: '3.0.0'
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
       - name: Build orlangure/gnomock image
         run: task gnomock:build:server
       - name: Start Gnomock server
@@ -74,22 +75,32 @@ jobs:
       - name: Test Gnomock connection
         run: curl localhost:23042/stop -d '{"id":"42"}'
 
-  test-sdk:
-    name: "[sdk] python"
+  test-service-containers:
+    name: "[core] service container"
     runs-on: ubuntu-latest
-    env:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    services:
+      gnomock:
+        image: orlangure/gnomock:v0.20.0
+        options: -v /var/run/docker.sock:/var/run/docker.sock
+        ports:
+        - 23042:23042
     steps:
-      - name: Check out code into the Go module directory
-        uses: actions/checkout@v1
-      - name: Install Task
-        uses: arduino/setup-task@v1
-        with:
-          version: '3.0.0'
-      - name: Generate
-        run: task generate:sdk:python
-      - name: Test
-        run: task test:sdk:python
+      - name: Setup postgres
+        run: |
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> /home/runner/.bash_profile
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew install httpie
+          http --ignore-stdin -v :23042/start/postgres options[custom_named_ports][default][protocol]=tcp options[custom_named_ports][default][port]:=5432 options[custom_named_ports][default][host_port]:=15432 options[debug]:=true
+
+      - name: Connect 1
+        run: PGPASSWORD=password psql -h 127.0.0.1 -U postgres -p 15432 -c "select 1;"
+
+      - name: Connect 2
+        run: PGPASSWORD=password psql -h 127.0.0.1 -U postgres -p 15432 -c "select 1;"
+
+      - name: Connect 3
+        run: PGPASSWORD=password psql -h 127.0.0.1 -U postgres -p 15432 -c "select 1;"
 
   test-localstack:
     name: "[preset] localstack"
@@ -97,10 +108,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -120,18 +131,18 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
         run: go get -v -t -d ./...
       - name: Test preset
-        run: go test -cover -covermode=atomic -coverprofile=preset-cover.txt -coverpkg=./... -v ./preset/elastic/...
+        run: go test -race -cover -covermode=atomic -coverprofile=preset-cover.txt -coverpkg=./... -v ./preset/elastic/...
       - name: Test server
-        run: go test -cover -covermode=atomic -coverprofile=server-cover.txt -coverpkg=./... -v ./internal/gnomockd -run TestElastic
+        run: go test -race -cover -covermode=atomic -coverprofile=server-cover.txt -coverpkg=./... -v ./internal/gnomockd -run TestElastic
       - name: Report coverage
         run: |
           cat preset-cover.txt server-cover.txt > coverage.txt
@@ -143,10 +154,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -166,10 +177,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -189,10 +200,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -212,10 +223,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -235,10 +246,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -258,10 +269,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -281,10 +292,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -304,10 +315,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -327,10 +338,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -350,10 +361,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -373,10 +384,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -396,10 +407,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -419,10 +430,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -442,10 +453,10 @@ jobs:
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Set up Go 1.17
+      - name: Set up Go 1.21
         uses: actions/setup-go@v1
         with:
-          go-version: 1.17
+          go-version: 1.21
       - name: Check out code into the Go module directory
         uses: actions/checkout@v1
       - name: Get dependencies
@@ -454,6 +465,53 @@ jobs:
         run: go test -race -cover -coverprofile=preset-cover.txt -coverpkg=./... -v ./preset/cassandra/...
       - name: Test server
         run: go test -race -cover -coverprofile=server-cover.txt -coverpkg=./... -v ./internal/gnomockd -run TestCassandra
+      - name: Report coverage
+        run: |
+          cat preset-cover.txt server-cover.txt > coverage.txt
+          bash <(curl -s https://codecov.io/bash)
+
+  test-azurite:
+    name: "[preset] azurite"
+    runs-on: ubuntu-latest
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.21
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v1
+      - name: Get dependencies
+        run: go get -v -t -d ./...
+      - name: Test preset
+        run: go test -race -cover -coverprofile=preset-cover.txt -coverpkg=./... -v ./preset/azurite/...
+      - name: Test server
+        run: go test -race -cover -coverprofile=server-cover.txt -coverpkg=./... -v ./internal/gnomockd -run TestAzurite
+      - name: Report coverage
+        run: |
+          cat preset-cover.txt server-cover.txt > coverage.txt
+          bash <(curl -s https://codecov.io/bash)
+
+  test-vault:
+    name: "[preset] vault"
+
+    runs-on: ubuntu-latest
+    env:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    steps:
+      - name: Set up Go 1.21
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.21
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v1
+      - name: Get dependencies
+        run: go get -v -t -d ./...
+      - name: Test preset
+        run: go test -race -cover -coverprofile=preset-cover.txt -coverpkg=./... -v ./preset/vault/...
+      - name: Test server
+        run: go test -race -cover -coverprofile=server-cover.txt -coverpkg=./... -v ./internal/gnomockd -run TestVault
       - name: Report coverage
         run: |
           cat preset-cover.txt server-cover.txt > coverage.txt

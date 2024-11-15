@@ -8,12 +8,18 @@ import (
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/preset/postgres"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestPreset(t *testing.T) {
 	t.Parallel()
 
-	for _, version := range []string{"10.15", "11.10", "12.5", "13.1"} {
+	for _, version := range []string{"10.15", "11.10", "12.5", "13.1", "14.11", "15.6", "16.2"} {
 		t.Run(version, testPreset(version))
 	}
 }
@@ -63,6 +69,8 @@ func testPreset(version string) func(t *testing.T) {
 		timezoneRow := db.QueryRow("show timezone")
 		require.NoError(t, timezoneRow.Scan(&timezone))
 		require.Equal(t, "Europe/Paris", timezone)
+
+		require.NoError(t, db.Close())
 	}
 }
 
@@ -104,4 +112,29 @@ func TestPreset_wrongQueriesFile(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can't read queries file")
 	require.NoError(t, gnomock.Stop(c))
+}
+
+func TestPreset_withContainerReuseAndDatabase(t *testing.T) {
+	t.Parallel()
+
+	p := postgres.Preset(postgres.WithDatabase("reused"))
+
+	c1, err := gnomock.Start(
+		p,
+		gnomock.WithContainerReuse(),
+		gnomock.WithContainerName("reusable-postgres"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, c1)
+
+	c2, err := gnomock.Start(
+		p,
+		gnomock.WithContainerReuse(),
+		gnomock.WithContainerName("reusable-postgres"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, c2)
+	require.Equal(t, c1.ID, c2.ID)
+
+	t.Cleanup(func() { require.NoError(t, gnomock.Stop(c1, c2)) })
 }

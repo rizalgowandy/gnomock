@@ -5,15 +5,25 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/client"
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/internal/cleaner"
 	"github.com/orlangure/gnomock/internal/health"
 	"github.com/orlangure/gnomock/internal/testutil"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestCleaner(t *testing.T) {
 	t.Parallel()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
 
 	p := &testutil.TestPreset{Img: testutil.TestImage}
 	targetContainer, err := gnomock.Start(p, gnomock.WithDisableAutoCleanup())
@@ -28,7 +38,7 @@ func TestCleaner(t *testing.T) {
 		gnomock.WithHealthCheck(func(ctx context.Context, c *gnomock.Container) error {
 			return health.HTTPGet(ctx, c.DefaultAddress())
 		}),
-		gnomock.WithInit(func(ctx context.Context, c *gnomock.Container) error {
+		gnomock.WithInit(func(_ context.Context, c *gnomock.Container) error {
 			return cleaner.Notify(rootCtx, c.DefaultAddress(), targetContainer.ID)
 		}),
 	)
@@ -39,8 +49,18 @@ func TestCleaner(t *testing.T) {
 	time.Sleep(time.Second * 5)
 
 	// both stop calls cause errors because both containers no longer exist
-	require.Error(t, gnomock.Stop(targetContainer))
-	require.Error(t, gnomock.Stop(cleanerContainer))
+	require.NoError(t, gnomock.Stop(targetContainer))
+	require.NoError(t, gnomock.Stop(cleanerContainer))
+
+	containerList, err := testutil.ListContainerByID(cli, targetContainer.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 0)
+
+	containerList, err = testutil.ListContainerByID(cli, cleanerContainer.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 0)
+
+	require.NoError(t, cli.Close())
 }
 
 func TestCleaner_wrongRequest(t *testing.T) {

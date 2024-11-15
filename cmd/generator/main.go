@@ -14,9 +14,7 @@ import (
 )
 
 const (
-	registryPlaceholder = `// new presets go here
-`
-	pytestPlaceholder = `### gnomock-generator
+	registryPlaceholder = `// new presets go here.
 `
 	startPresetPlaceholder = `### /start/preset
 `
@@ -38,7 +36,7 @@ var (
 var fMap = template.FuncMap{
 	"lower": strings.ToLower,
 	"title": func(s string) string {
-		return strings.Title(strings.ToLower(s))
+		return strings.Title(strings.ToLower(s)) // nolint: staticcheck
 	},
 	"snake": func(s string) string {
 		snake := matchFirstCap.ReplaceAllString(s, "${1}_${2}")
@@ -82,10 +80,6 @@ func generate() error {
 		}
 
 		if err := registry(pp); err != nil {
-			return err
-		}
-
-		if err := sdktestPkg(pp); err != nil {
 			return err
 		}
 
@@ -229,34 +223,6 @@ func registry(params presetParams) error {
 	return nil
 }
 
-// sdktestPkg generates code required for testing the generated SDK. It creates
-// a `testdata` folder for a new preset and adds a test stub to `test_sdk.py`.
-//
-// Test generator is the most basic possible: it will generate wrong names for
-// any preset that doesn't have a single word, simple case name like "Redis" or
-// "Kubernetes": names like RabbitMQ will break.
-func sdktestPkg(params presetParams) error {
-	testPath := path.Join("sdktest", "python", "test")
-	dir := path.Join(testPath, "testdata", strings.ToLower(params.Name))
-
-	if err := os.MkdirAll(dir, os.ModePerm); err != nil {
-		return fmt.Errorf("can't create testdata dir: %w", err)
-	}
-
-	pytestFileName := path.Join(testPath, "test_sdk.py")
-
-	if err := replacePlaceholder(
-		pytestFileName,
-		"cmd/generator/templates/sdktest/python/test/test_sdk.py.template",
-		pytestPlaceholder,
-		params,
-	); err != nil {
-		return fmt.Errorf("can't generate python tests: %w", err)
-	}
-
-	return nil
-}
-
 // swagger generates new definitions in swagger.yaml file. These definitions
 // should be extended with options supported by a new preset.
 func swagger(params presetParams) error {
@@ -349,7 +315,7 @@ func replacePlaceholder(targetFile, tmplFile, placeholder string, params presetP
 
 	targetStr := strings.ReplaceAll(string(targetBs), placeholder, buf.String())
 
-	if err := os.WriteFile(targetFile, []byte(targetStr), 0644); err != nil {
+	if err := os.WriteFile(targetFile, []byte(targetStr), 0o644); err != nil {
 		return fmt.Errorf("can't write %s: %w", targetFile, err)
 	}
 

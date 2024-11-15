@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/client"
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/internal/health"
 	"github.com/orlangure/gnomock/internal/testutil"
@@ -32,6 +33,10 @@ func TestPreset_parallel(t *testing.T) {
 	for _, c := range containers {
 		require.NoError(t, health.HTTPGet(ctx, c.Address("web80")))
 		require.NoError(t, health.HTTPGet(ctx, c.Address("web8080")))
+	}
+
+	for _, c := range containers {
+		require.NoError(t, gnomock.Stop(c))
 	}
 }
 
@@ -70,12 +75,21 @@ func TestPreset_containerRemainsIfDebug(t *testing.T) {
 	time.Sleep(time.Second)
 
 	// confirm it doesn't exist anymore
-	err = gnomock.Stop(container)
-	require.Error(t, err)
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
+
+	containerList, err := testutil.ListContainerByID(cli, container.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 0)
+
+	require.NoError(t, cli.Close())
 }
 
 func TestPreset_duplicateContainerName(t *testing.T) {
 	t.Parallel()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
 
 	p := &testutil.TestPreset{Img: testutil.TestImage}
 	originalContainer, err := gnomock.Start(
@@ -94,6 +108,68 @@ func TestPreset_duplicateContainerName(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	require.Error(t, gnomock.Stop(originalContainer))
+	containerList, err := testutil.ListContainerByID(cli, originalContainer.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 0)
 	require.NoError(t, gnomock.Stop(newContainer))
+
+	require.NoError(t, cli.Close())
+}
+
+func TestPreset_reusableContainerSucceeds(t *testing.T) {
+	t.Parallel()
+
+	p := &testutil.TestPreset{Img: testutil.TestImage}
+	originalContainer, err := gnomock.Start(
+		p,
+		gnomock.WithTimeout(time.Minute),
+		gnomock.WithContainerName("gnomock-reuse"),
+		gnomock.WithDebugMode(),
+	)
+	require.NoError(t, err)
+
+	newContainer, err := gnomock.Start(
+		p,
+		gnomock.WithTimeout(time.Minute),
+		gnomock.WithContainerName("gnomock-reuse"),
+		gnomock.WithDebugMode(),
+		gnomock.WithContainerReuse(),
+	)
+	require.NoError(t, err)
+
+	require.Equal(t, originalContainer.ID, newContainer.ID)
+	require.NoError(t, gnomock.Stop(newContainer))
+}
+
+func TestPreset_reusableContainerFailsWithoutName(t *testing.T) {
+	t.Parallel()
+
+	p := &testutil.TestPreset{Img: testutil.TestImage}
+	_, err := gnomock.Start(
+		p,
+		gnomock.WithTimeout(time.Minute),
+		gnomock.WithContainerReuse(),
+		gnomock.WithDebugMode(),
+	)
+	require.EqualError(t, err, "can't start container: container name is required when container reuse is enabled")
+}
+
+func TestPreset_customNamedPorts(t *testing.T) {
+	t.Parallel()
+
+	p := &testutil.TestPreset{Img: testutil.TestImage}
+	presetPorts := p.Ports()
+	pr := presetPorts["web80"]
+	pr.HostPort = 23080
+	presetPorts["web80"] = pr
+
+	container, err := gnomock.Start(
+		p,
+		gnomock.WithCustomNamedPorts(presetPorts),
+		gnomock.WithDebugMode(),
+	)
+
+	t.Cleanup(func() { require.NoError(t, gnomock.Stop(container)) })
+	require.NoError(t, err)
+	require.Equal(t, 23080, container.Ports.Get("web80").Port)
 }

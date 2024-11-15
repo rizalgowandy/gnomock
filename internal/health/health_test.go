@@ -8,7 +8,13 @@ import (
 
 	"github.com/orlangure/gnomock/internal/health"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestHTTPGet(t *testing.T) {
 	ctx := context.Background()
@@ -22,7 +28,7 @@ func TestHTTPGet(t *testing.T) {
 	})
 
 	t.Run("invalid status code", func(t *testing.T) {
-		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer s.Close()
@@ -32,7 +38,7 @@ func TestHTTPGet(t *testing.T) {
 	})
 
 	t.Run("success", func(t *testing.T) {
-		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer s.Close()

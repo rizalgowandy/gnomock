@@ -34,7 +34,7 @@ docker run --rm \
     -p 23042:23042 \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v $PWD:$PWD \
-    --privileged \ # this flag may be required on some systems
+    --privileged \
     orlangure/gnomock
 ```
 
@@ -45,6 +45,8 @@ can use any port you like, just make sure to configure the client properly.
 with the docker engine running on host. Without it `gnomock` can't access
 docker.
 
+`--privileged` may be required on some systems.
+ 
 If you use any file-related `gnomock` options, like `WithQueriesFile`, you have
 to make the path you use available inside the container:
 
@@ -88,17 +90,7 @@ $ curl --data @mysql-preset.json http://127.0.0.1:23042/start/mysql
 }
 ```
 
-There are auto-generated wrappers for the available API:
-
-| Client | Sample code |
-|--------|-------------|
-| [Python SDK](https://github.com/orlangure/gnomock-python-sdk) | [Code](https://github.com/orlangure/gnomock/blob/master/sdktest/python/test/test_sdk.py) |
-| JavaScript SDK | |
-| Ruby SDK | |
-| PHP SDK | |
-| Java SDK | |
-| [Other](https://openapi-generator.tech/docs/generators) languages | |
-
-**For more details and a full specification, see
-[documentation](https://app.swaggerhub.com/apis/orlangure/gnomock/).**
+For more details and a full specification, see
+[documentation](https://app.swaggerhub.com/apis/orlangure/gnomock/). Use
+OpenAPI generator to create API wrappers in the language of your choice.
 

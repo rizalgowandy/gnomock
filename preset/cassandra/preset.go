@@ -51,7 +51,7 @@ type P struct {
 
 // Image returns an image that should be pulled to create this container.
 func (p *P) Image() string {
-	return fmt.Sprintf("docker.io/bitnami/cassandra:%s", p.Version)
+	return fmt.Sprintf("docker.io/library/cassandra:%s", p.Version)
 }
 
 // Ports returns ports that should be used to access this container.
@@ -76,7 +76,7 @@ func (p *P) setDefaults() {
 	}
 }
 
-func (p *P) healthcheck(ctx context.Context, c *gnomock.Container) error {
+func (p *P) healthcheck(_ context.Context, c *gnomock.Container) error {
 	cluster := gocql.NewCluster(c.DefaultAddress())
 	cluster.Authenticator = gocql.PasswordAuthenticator{
 		Username: DefaultUser,

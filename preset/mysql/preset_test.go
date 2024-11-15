@@ -8,7 +8,13 @@ import (
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/preset/mysql"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestPreset(t *testing.T) {
 	t.Parallel()
@@ -30,7 +36,7 @@ func testPreset(version string) func(t *testing.T) {
 			mysql.WithDatabase("books"),
 			mysql.WithQueries(queries, query),
 			mysql.WithQueriesFile("./testdata/queries.sql"),
-			mysql.WithVersion("8.0.22"),
+			mysql.WithVersion(version),
 		)
 
 		container, err := gnomock.Start(p)
@@ -59,6 +65,8 @@ func testPreset(version string) func(t *testing.T) {
 		require.Equal(t, float64(2), avg)
 		require.Equal(t, float64(1), min)
 		require.Equal(t, float64(3), count)
+
+		require.NoError(t, db.Close())
 	}
 }
 

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	defaultVersion  = "v20.1.10"
+	defaultVersion  = "v23.1.20"
 	defaultPort     = 26257
 	defaultDatabase = "mydb"
 )
@@ -84,9 +84,13 @@ func (p *P) setDefaults() {
 	}
 }
 
-func healthcheck(ctx context.Context, c *gnomock.Container) error {
+func healthcheck(_ context.Context, c *gnomock.Container) error {
 	db, err := connect(c, "")
 	if err != nil {
+		if db != nil {
+			_ = db.Close()
+		}
+
 		return err
 	}
 
@@ -100,7 +104,7 @@ func healthcheck(ctx context.Context, c *gnomock.Container) error {
 }
 
 func (p *P) initf() gnomock.InitFunc {
-	return func(ctx context.Context, c *gnomock.Container) error {
+	return func(_ context.Context, c *gnomock.Container) error {
 		db, err := connect(c, "")
 		if err != nil {
 			return err
@@ -108,6 +112,7 @@ func (p *P) initf() gnomock.InitFunc {
 
 		_, err = db.Exec("create database " + p.DB)
 		if err != nil {
+			_ = db.Close()
 			return err
 		}
 

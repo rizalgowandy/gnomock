@@ -8,26 +8,16 @@ commands:
           name: install golang
           command: |
             sudo rm -rf /usr/local/go
-            wget -c https://dl.google.com/go/go1.17.5.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
+            wget -c https://dl.google.com/go/go1.21.0.linux-amd64.tar.gz -O - | sudo tar -xz -C /usr/local
       - checkout
       - run:
           name: Get dependencies
           command : go get -v -t -d ./...
 
 jobs:
-  lint:
-    docker:
-      - image: circleci/golang:1.17
-    steps:
-      - checkout
-      - run:
-          name: golangci-lint
-          command: |
-            curl -sfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh| sh -s -- -b $(go env GOPATH)/bin v1.39.0
-            $(go env GOPATH)/bin/golangci-lint run ./... --timeout 10m0s
-
   test-core:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -37,43 +27,9 @@ jobs:
           name: Test gnomockd
           command: go test -race -cover -v ./internal/gnomockd -run TestGnomockd
 
-  test-sdk-python:
-    machine: true
-    steps:
-      - checkout
-      - run:
-          name: Install Python
-          command: |
-            cd /opt/circleci/.pyenv/plugins/python-build/../.. && git pull && cd -
-            pyenv install 3.6.9
-            pyenv local 3.6.9
-      - run:
-          name: Get dependencies
-          command: |
-            cd sdktest/python
-            pip3 install -r requirements.txt
-      - run:
-          name: Generate python sdk
-          command: swagger/bin/generate-python.sh
-      - run:
-          name: Build docker image
-          command: docker build --tag gnomock .
-      - run:
-          name: Run gnomock
-          command: |
-            docker run -itd \
-              -p 23042:23042 \
-              -v /var/run/docker.sock:/var/run/docker.sock \
-              -v `pwd`:`pwd` \
-              gnomock
-      - run:
-          name: Test
-          command: |
-            cd sdktest/python
-            python3 -m pytest -n 3 -v -k TestSDK
-
   test-localstack:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -85,17 +41,19 @@ jobs:
 
   test-elastic:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
           name: Test preset
-          command: go test -cover -v ./preset/elastic/...
+          command: go test -race -cover -v ./preset/elastic/...
       - run:
           name: Test server
-          command: go test -v ./internal/gnomockd -run TestElastic
+          command: go test -race -v ./internal/gnomockd -run TestElastic
 
   test-memcached:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -107,6 +65,7 @@ jobs:
 
   test-rabbitmq:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -118,6 +77,7 @@ jobs:
 
   test-kafka:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -129,6 +89,7 @@ jobs:
 
   test-postgres:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -140,6 +101,7 @@ jobs:
 
   test-mariadb:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -151,6 +113,7 @@ jobs:
 
   test-splunk:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -162,6 +125,7 @@ jobs:
 
   test-redis:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -173,6 +137,7 @@ jobs:
 
   test-mysql:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -184,6 +149,7 @@ jobs:
 
   test-mssql:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -195,6 +161,7 @@ jobs:
 
   test-mongo:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -205,7 +172,9 @@ jobs:
           command: go test -race -cover -v ./internal/gnomockd -run TestMongo
 
   test-k3s:
-    machine: true
+    machine:
+      image: ubuntu-2004:2022.04.2
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -217,6 +186,7 @@ jobs:
 
   test-cockroachdb:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -228,6 +198,7 @@ jobs:
 
   test-influxdb:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -239,6 +210,7 @@ jobs:
 
   test-cassandra:
     machine: true
+    resource_class: large
     steps:
       - setup-for-go-test
       - run:
@@ -248,14 +220,36 @@ jobs:
           name: Test server
           command: go test -race -cover -v ./internal/gnomockd -run TestCassandra
 
+  test-vault:
+    machine: true
+    resource_class: large
+    steps:
+      - setup-for-go-test
+      - run:
+          name: Test preset
+          command: go test -race -cover -v ./preset/vault/...
+      - run:
+          name: Test server
+          command: go test -race -cover -v ./internal/gnomockd -run TestVault
+
+  test-azurite:
+    machine: true
+    resource_class: large
+    steps:
+      - setup-for-go-test
+      - run:
+          name: Test preset
+          command: go test -race -cover -v ./preset/azurite/...
+      - run:
+          name: Test server
+          command: go test -race -cover -v ./internal/gnomockd -run TestAzurite
+
 ### preset tests go here
 
 workflows:
   build-workflow:
     jobs:
-      - lint
       - test-core
-      - test-sdk-python
       - test-localstack
       - test-elastic
       - test-memcached
@@ -272,4 +266,7 @@ workflows:
       - test-cockroachdb
       - test-influxdb
       - test-cassandra
+      - test-vault
+      - test-azurite
+
 ### circleci jobs go here

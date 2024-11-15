@@ -5,11 +5,18 @@ import (
 	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/preset/mssql"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestPreset(t *testing.T) {
 	t.Parallel()
@@ -35,7 +42,11 @@ func testPreset(version string) func(t *testing.T) {
 			mssql.WithQueriesFile("./testdata/queries.sql"),
 		)
 
-		container, err := gnomock.Start(p, gnomock.WithLogWriter(os.Stdout))
+		container, err := gnomock.Start(
+			p,
+			gnomock.WithLogWriter(os.Stdout),
+			gnomock.WithTimeout(time.Minute*10),
+		)
 
 		defer func() { _ = gnomock.Stop(container) }()
 
@@ -58,6 +69,7 @@ func testPreset(version string) func(t *testing.T) {
 		require.Equal(t, float64(2), avg)
 		require.Equal(t, float64(1), min)
 		require.Equal(t, float64(3), count)
+		require.NoError(t, db.Close())
 	}
 }
 
@@ -65,7 +77,7 @@ func TestPreset_withDefaults(t *testing.T) {
 	t.Parallel()
 
 	p := mssql.Preset(mssql.WithLicense(true))
-	container, err := gnomock.Start(p)
+	container, err := gnomock.Start(p, gnomock.WithTimeout(time.Minute*10))
 
 	defer func() { require.NoError(t, gnomock.Stop(container)) }()
 

@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	defaultTimeout             = time.Second * 300
+	defaultTimeout             = time.Minute * 10
 	defaultHealthcheckInterval = time.Millisecond * 250
 )
 
@@ -117,6 +117,10 @@ func WithOptions(options *Options) Option {
 			o.Timeout = options.Timeout
 		}
 
+		if options.CustomNamedPorts != nil {
+			o.CustomNamedPorts = options.CustomNamedPorts
+		}
+
 		o.Env = append(o.Env, options.Env...)
 		o.Debug = options.Debug
 		o.ContainerName = options.ContainerName
@@ -128,6 +132,14 @@ func WithOptions(options *Options) Option {
 func WithCommand(cmd string, args ...string) Option {
 	return func(o *Options) {
 		o.Cmd = append([]string{cmd}, args...)
+	}
+}
+
+// WithEntrypoint overwrites the entrypoint, and its arguments, defined
+// in the original docker image.
+func WithEntrypoint(entrypoint string, args ...string) Option {
+	return func(o *Options) {
+		o.Entrypoint = append([]string{entrypoint}, args...)
 	}
 }
 
@@ -160,6 +172,14 @@ func WithUseLocalImagesFirst() Option {
 	}
 }
 
+// WithCustomNamedPorts allows to define custom ports for a container. This
+// option should be used to override the ports defined by presets.
+func WithCustomNamedPorts(namedPorts NamedPorts) Option {
+	return func(o *Options) {
+		o.CustomNamedPorts = namedPorts
+	}
+}
+
 // WithRegistryAuth allows to access private docker images. The credentials
 // should be passes as a Base64 encoded string, where the content is a JSON
 // string with two fields: username and password.
@@ -172,6 +192,32 @@ func WithUseLocalImagesFirst() Option {
 func WithRegistryAuth(auth string) Option {
 	return func(o *Options) {
 		o.Auth = auth
+	}
+}
+
+// WithContainerReuse disables Gnomock default behaviour of automatic container
+// cleanup and also disables the automatic replacement at startup of an existing
+// container with the same name and image. Effectively this makes Gnomock reuse
+// a container from a previous Gnomock execution.
+func WithContainerReuse() Option {
+	return func(o *Options) {
+		o.Reuse = true
+	}
+}
+
+// WithExtraHosts allows to provide custom entries to the hosts file of the container.
+// It is similar to the `--add-host` flag of docker.
+func WithExtraHosts(hosts []string) Option {
+	return func(o *Options) {
+		o.ExtraHosts = hosts
+	}
+}
+
+// WithCustomImage allows to define a custom image name. This option should be used to
+// override the image registry and repository defined by presets.
+func WithCustomImage(image string) Option {
+	return func(o *Options) {
+		o.CustomImage = image
 	}
 }
 
@@ -222,6 +268,10 @@ type Options struct {
 	// level.
 	Cmd []string `json:"cmd"`
 
+	// Entrypoint is the binary that will always be executed when the container
+	// is run. The difference between this and Cmd, is that Cmd will be given as an
+	// argument to Entrypoint.
+	Entrypoint []string `json:"entrypoint"`
 	// HostMounts allows to mount local paths into the container.
 	HostMounts map[string]string `json:"host_mounts"`
 
@@ -234,6 +284,18 @@ type Options struct {
 	// instead of always pulling the images.
 	UseLocalImagesFirst bool `json:"use_local_images_first"`
 
+	// CustomNamedPorts allows to override the ports set by the presets. This
+	// option is useful for cases when the presets need to be created with
+	// custom port definitions. This is an advanced feature and should be used
+	// with care.
+	//
+	// Note that when using this option, you should provide custom named ports
+	// with names matching the original ports returned by the used preset.
+	//
+	// When calling StartCustom directly from Go, it is possible to provide the
+	// ports directly to the function.
+	CustomNamedPorts NamedPorts `json:"custom_named_ports"`
+
 	// Base64 encoded JSON string with docker access credentials. JSON string
 	// should include two fields: username and password. For Docker Hub, if 2FA
 	// authentication is enabled, an access token should be used instead of a
@@ -244,6 +306,22 @@ type Options struct {
 	// which stands for
 	//	{"username":"foo","password":"bar"}
 	Auth string `json:"auth"`
+
+	// ExtraHosts allows to add entries to the hosts file of the container.
+	// It is similar to the `--add-host` flag of docker.
+	ExtraHosts []string `json:"extraHosts"`
+
+	// Reuse prevents the container from being automatically stopped and enables
+	// its re-use in posterior executions.
+	Reuse bool `json:"reuse"`
+
+	// CustomImage allows to override the name of the image set by the presets
+	// with a custom image name. This option is useful for cases where it is
+	// required to pull the preset image from a custom registry and repository.
+	//
+	// Note that when using this option, you are responsible for verifying the
+	// validity of the provided image registry and repository.
+	CustomImage string `json:"customImage"`
 
 	ctx                 context.Context
 	init                InitFunc

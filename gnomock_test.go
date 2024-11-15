@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/docker/client"
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/internal/testutil"
 	"github.com/stretchr/testify/require"
@@ -134,6 +135,41 @@ func TestGnomock_cantStart(t *testing.T) {
 	require.NoError(t, gnomock.Stop(container))
 }
 
+func TestGnomock_withDebugMode(t *testing.T) {
+	t.Parallel()
+
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	require.NoError(t, err)
+
+	container, err := gnomock.StartCustom(
+		testutil.TestImage, gnomock.DefaultTCP(testutil.GoodPort80),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, container)
+	require.NoError(t, gnomock.Stop(container))
+
+	containerList, err := testutil.ListContainerByID(cli, container.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 0)
+
+	container, err = gnomock.StartCustom(
+		testutil.TestImage, gnomock.DefaultTCP(testutil.GoodPort80),
+		gnomock.WithDebugMode(),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, container)
+
+	containerList, err = testutil.ListContainerByID(cli, container.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 1)
+	require.NoError(t, gnomock.Stop(container))
+
+	containerList, err = testutil.ListContainerByID(cli, container.ID)
+	require.NoError(t, err)
+	require.Len(t, containerList, 0)
+	require.NoError(t, cli.Close())
+}
+
 func TestGnomock_withLogWriter(t *testing.T) {
 	t.Parallel()
 
@@ -191,6 +227,46 @@ func TestGnomock_withCommand(t *testing.T) {
 	require.NoError(t, r.Close())
 }
 
+func TestGnomock_withEntrypoint(t *testing.T) {
+	t.Run("overwriting entrypoint with the same entrypoint as the original image", func(t *testing.T) {
+		r, w := io.Pipe()
+
+		container, err := gnomock.StartCustom(
+			testutil.TestImage,
+			gnomock.DefaultTCP(testutil.GoodPort80),
+			gnomock.WithLogWriter(w),
+			gnomock.WithEntrypoint("/app"),
+			gnomock.WithCommand("foo", "bar"),
+		)
+		require.NoError(t, err)
+
+		signal := make(chan struct{})
+
+		go func() {
+			defer close(signal)
+
+			log, err := io.ReadAll(r)
+			require.NoError(t, err)
+			require.Contains(t, string(log), "[foo bar]")
+		}()
+
+		require.NoError(t, gnomock.Stop(container))
+
+		require.NoError(t, w.Close())
+		<-signal
+		require.NoError(t, r.Close())
+	})
+	t.Run("overwriting entrypoint with a new entrypoint", func(t *testing.T) {
+		_, err := gnomock.StartCustom(
+			testutil.TestImage,
+			gnomock.DefaultTCP(testutil.GoodPort80),
+			gnomock.WithEntrypoint("echo"),
+		)
+
+		require.ErrorContains(t, err, "\"echo\": executable file not found in $PATH")
+	})
+}
+
 // See https://github.com/orlangure/gnomock/issues/302
 func TestGnomock_witUseLocalImagesFirst(t *testing.T) {
 	t.Parallel()
@@ -200,6 +276,7 @@ func TestGnomock_witUseLocalImagesFirst(t *testing.T) {
 		circleciMongoImage = "docker.io/circleci/mongo:4.4"
 	)
 
+	// this block will ensure having a local library/mongo image
 	container, err := gnomock.StartCustom(
 		mongoImage,
 		gnomock.DefaultTCP(testutil.GoodPort80),
@@ -209,20 +286,91 @@ func TestGnomock_witUseLocalImagesFirst(t *testing.T) {
 	require.NotNil(t, container)
 	require.NoError(t, gnomock.Stop(container))
 
-	container, err = gnomock.StartCustom(
-		mongoImage,
+	t.Run("library mongo image", func(t *testing.T) {
+		t.Parallel()
+
+		// this actually uses the local image
+		container, err := gnomock.StartCustom(
+			mongoImage,
+			gnomock.DefaultTCP(testutil.GoodPort80),
+			gnomock.WithUseLocalImagesFirst(),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, container)
+		require.NoError(t, gnomock.Stop(container))
+	})
+
+	t.Run("circleci mongo image", func(t *testing.T) {
+		t.Parallel()
+
+		container, err := gnomock.StartCustom(
+			circleciMongoImage,
+			gnomock.DefaultTCP(testutil.GoodPort80),
+			gnomock.WithUseLocalImagesFirst(),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, container)
+		require.NoError(t, gnomock.Stop(container))
+	})
+
+	t.Run("local image", func(t *testing.T) {
+		t.Parallel()
+		t.Skip("Enable this test when building from Dockerfile is supported")
+
+		container, err := gnomock.StartCustom(
+			"local-image",
+			gnomock.DefaultTCP(testutil.GoodPort80),
+			gnomock.WithUseLocalImagesFirst(),
+		)
+		require.NoError(t, err)
+		require.NotNil(t, container)
+		require.NoError(t, gnomock.Stop(container))
+	})
+}
+
+func TestGnomock_withExtraHosts(t *testing.T) {
+	t.Parallel()
+
+	const (
+		busyboxImage = "docker.io/library/busybox:1.35.0"
+		retries      = "5"
+	)
+
+	container, err := gnomock.StartCustom(
+		busyboxImage,
 		gnomock.DefaultTCP(testutil.GoodPort80),
-		gnomock.WithUseLocalImagesFirst(),
+		gnomock.WithExtraHosts([]string{"test:127.0.0.1"}),
+		gnomock.WithCommand("ping", "-c", retries, "test"),
 	)
 	require.NoError(t, err)
 	require.NotNil(t, container)
 	require.NoError(t, gnomock.Stop(container))
 
 	container, err = gnomock.StartCustom(
-		circleciMongoImage,
+		busyboxImage,
 		gnomock.DefaultTCP(testutil.GoodPort80),
-		gnomock.WithUseLocalImagesFirst(),
+		gnomock.WithCommand("ping", "-c", retries, "test"),
 	)
+	require.Error(t, err)
+	require.Nil(t, container)
+	require.NoError(t, gnomock.Stop(container))
+
+	container, err = gnomock.StartCustom(
+		busyboxImage,
+		gnomock.DefaultTCP(testutil.GoodPort80),
+		gnomock.WithExtraHosts([]string{"test:127.0.0.1"}),
+		gnomock.WithCommand("ping", "-c", retries, "google.com"),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, container)
+	require.NoError(t, gnomock.Stop(container))
+}
+
+func TestGnomock_withCustomImage(t *testing.T) {
+	t.Parallel()
+
+	p := &testutil.TestPreset{Img: "docker.io/orlangure/noimage"}
+	container, err := gnomock.Start(p, gnomock.WithCustomImage(testutil.TestImage))
 	require.NoError(t, err)
 	require.NotNil(t, container)
 	require.NoError(t, gnomock.Stop(container))
@@ -248,6 +396,6 @@ func requireResponse(t *testing.T, url string, expected string) {
 	require.Equal(t, expected, string(body))
 }
 
-func failingHealthcheck(ctx context.Context, c *gnomock.Container) error {
+func failingHealthcheck(_ context.Context, _ *gnomock.Container) error {
 	return fmt.Errorf("this container should not start")
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"time"
 
@@ -17,16 +18,18 @@ import (
 
 // The following ports are exposed by this preset:.
 const (
-	BrokerPort    = "broker"
-	ZooKeeperPort = "zookeeper"
-	WebPort       = "web"
+	BrokerPort         = "broker"
+	ZooKeeperPort      = "zookeeper"
+	WebPort            = "web"
+	SchemaRegistryPort = "registry"
 )
 
 const (
-	defaultVersion = "2.5.1-L0"
-	brokerPort     = 49092
-	zookeeperPort  = 2181
-	webPort        = 3030
+	defaultVersion     = "3.6.1-L0"
+	brokerPort         = 49092
+	zookeeperPort      = 2181
+	webPort            = 3030
+	schemaRegistryPort = 8081
 )
 
 // Message is a single message sent to Kafka.
@@ -60,12 +63,20 @@ func Preset(opts ...Option) gnomock.Preset {
 	return p
 }
 
+type TopicConfig struct {
+	Topic         string
+	NumPartitions int
+}
+
 // P is a Gnomock Preset implementation of Kafka.
 type P struct {
-	Version       string    `json:"version"`
-	Topics        []string  `json:"topics"`
-	Messages      []Message `json:"messages"`
-	MessagesFiles []string  `json:"messages_files"`
+	Version           string    `json:"version"`
+	Topics            []string  `json:"topics"`
+	Messages          []Message `json:"messages"`
+	MessagesFiles     []string  `json:"messages_files"`
+	UseSchemaRegistry bool      `json:"use_schema_registry"`
+
+	TopicConfigs []TopicConfig `json:"topic_configs"`
 }
 
 // Image returns an image that should be pulled to create this container.
@@ -83,6 +94,7 @@ func (p *P) Ports() gnomock.NamedPorts {
 
 	namedPorts[ZooKeeperPort] = gnomock.TCP(zookeeperPort)
 	namedPorts[WebPort] = gnomock.TCP(webPort)
+	namedPorts[SchemaRegistryPort] = gnomock.TCP(schemaRegistryPort)
 
 	return namedPorts
 }
@@ -101,7 +113,7 @@ func (p *P) Options() []gnomock.Option {
 		gnomock.WithEnv("SAMPLEDATA=0"),
 	}
 
-	if len(p.Topics) > 0 || len(p.Messages) > 0 {
+	if len(p.Topics) > 0 || len(p.TopicConfigs) > 0 || len(p.Messages) > 0 {
 		opts = append(opts, gnomock.WithInit(p.initf))
 	}
 
@@ -131,6 +143,47 @@ func (p *P) healthcheck(ctx context.Context, c *gnomock.Container) (err error) {
 		NumPartitions:     1,
 	}); err != nil {
 		return fmt.Errorf("can't create topic: %w", err)
+	}
+
+	group, err := kafka.NewConsumerGroup(kafka.ConsumerGroupConfig{
+		ID:      "gnomock",
+		Brokers: []string{c.Address(BrokerPort)},
+		Topics:  []string{"gnomock"},
+	})
+	if err != nil {
+		return fmt.Errorf("can't create consumer group: %w", err)
+	}
+
+	defer func() { _ = group.Close() }()
+
+	if _, err := group.Next(ctx); err != nil {
+		return fmt.Errorf("can't read next consumer group: %w", err)
+	}
+
+	if p.UseSchemaRegistry {
+		if err := p.healthcheckRegistry(ctx, c); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (p *P) healthcheckRegistry(ctx context.Context, c *gnomock.Container) error {
+	url := "http://" + c.Address(SchemaRegistryPort)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("invalid request: %w", err)
+	}
+
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("schema registry is not available: %w", err)
+	}
+
+	if err := res.Body.Close(); err != nil {
+		return fmt.Errorf("error closing schema registry response body: %w", err)
 	}
 
 	return nil
@@ -180,13 +233,21 @@ func (p *P) ingestMessageFiles(ctx context.Context, c *gnomock.Container, conn *
 		p.Topics = append(p.Topics, topic)
 	}
 
-	topics := make([]kafka.TopicConfig, 0, len(p.Topics))
+	topics := make([]kafka.TopicConfig, 0, len(p.Topics)+len(p.TopicConfigs))
 
 	for _, topic := range p.Topics {
 		topics = append(topics, kafka.TopicConfig{
 			Topic:             topic,
 			ReplicationFactor: 1,
 			NumPartitions:     1,
+		})
+	}
+
+	for _, topic := range p.TopicConfigs {
+		topics = append(topics, kafka.TopicConfig{
+			Topic:             topic.Topic,
+			ReplicationFactor: 1, // cannot set more; cluster has just 1 node
+			NumPartitions:     topic.NumPartitions,
 		})
 	}
 

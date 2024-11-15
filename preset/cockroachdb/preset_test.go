@@ -8,12 +8,18 @@ import (
 	"github.com/orlangure/gnomock"
 	"github.com/orlangure/gnomock/preset/cockroachdb"
 	"github.com/stretchr/testify/require"
+
+	"go.uber.org/goleak"
 )
+
+func TestMain(m *testing.M) {
+	goleak.VerifyTestMain(m)
+}
 
 func TestPreset(t *testing.T) {
 	t.Parallel()
 
-	for _, version := range []string{"v19.2.11", "v20.1.10"} {
+	for _, version := range []string{"v19.2.11", "v20.1.10", "v21.2.17", "v22.2.19", "v23.1.20"} {
 		t.Run(version, testPreset(version))
 	}
 }
@@ -54,6 +60,7 @@ func testPreset(version string) func(t *testing.T) {
 		require.Equal(t, float64(2), avg)
 		require.Equal(t, float64(1), min)
 		require.Equal(t, float64(3), count)
+		require.NoError(t, db.Close())
 	}
 }
 

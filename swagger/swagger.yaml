@@ -7,7 +7,7 @@ info:
     testing toolkit. It allows to use Gnomock outside of Go ecosystem. Not all
     Gnomock features exist in this wrapper, but official presets, as well as
     basic general configuration, are supported.
-  version: 1.19.0
+  version: 1.26.0
   contact:
     url: https://github.com/orlangure/gnomock/
   license:
@@ -329,6 +329,46 @@ paths:
           $ref: '#/components/responses/start-failed'
       tags:
         - presets
+        -
+  /start/azurite:
+    post:
+      summary: Start a new Gnomock Azurite container
+      operationId: startAzurite
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/azurite-request'
+      responses:
+        '200':
+          $ref: '#/components/responses/container-created'
+        '400':
+          $ref: '#/components/responses/invalid-configuration'
+        '500':
+          $ref: '#/components/responses/start-failed'
+      tags:
+        - presets
+
+  /start/vault:
+    post:
+      summary: Start a new Gnomock Vault preset.
+      operationId: startVault
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/vault-request'
+      responses:
+        '200':
+          $ref: '#/components/responses/container-created'
+        '400':
+          $ref: '#/components/responses/invalid-configuration'
+        '500':
+          $ref: '#/components/responses/start-failed'
+      tags:
+        - presets
 
 ### /start/preset
 
@@ -478,6 +518,8 @@ components:
         use_local_images_first:
           type: boolean
           description: If possible to avoid hitting the Docker Hub pull rate limit.
+        custom_named_ports:
+          $ref: '#/components/schemas/named-ports'
         auth:
           type: string
           description: >
@@ -1036,6 +1078,10 @@ components:
           description: Kafka version.
           default: 2.5.1-L0
           example: latest
+        use_schema_registry:
+          type: boolean
+          description: Set to true to wait for schema registry on startup
+          default: false
       description: >
         This object describes a Kafka container.
 
@@ -1063,7 +1109,7 @@ components:
         version:
           type: string
           description: Elasticsearch version.
-          default: 7.9.2
+          default: 8.7.0
           example: latest
       description: >
         This object describes a Elasticsearch container.
@@ -1170,6 +1216,80 @@ components:
           default: latest
       description: >
         This object describes Cassandra container.
+
+    azurite-request:
+      type: object
+      properties:
+        preset:
+          $ref: '#/components/schemas/azurite'
+        options:
+          $ref: '#/components/schemas/options'
+      description: >
+        This request includes Azurite and general configuration.
+
+    azurite:
+      type: object
+      properties:
+        blobstore_path:
+          type: string
+          description: >
+            Path to folder to setup initial blobstore state. Top level folders are
+            used as buckets; all child folders and files are uploaded as-is
+          example: /home/gnomock/project/testdata/azurite
+        version:
+          type: string
+          description: Docker image tag (version)
+          default: latest
+      description: >
+        This object describes Azurite container.
+
+    vault-request:
+      type: object
+      properties:
+        preset:
+          $ref: '#/components/schemas/vault'
+        options:
+          $ref: '#/components/schemas/options'
+      description: >
+        This request includes Vault and general configuration.
+
+    vault:
+      type: object
+      properties:
+        auth_token:
+          type: string
+          description: Sets authentication (root) token to be used to connect to this container
+          default: gnomock-vault-token
+        auth:
+          type: array
+          description: Adds a new auth method.
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+                description:  The mountpath of the new auth method
+              type:
+                type: string
+                description: 'Represents the auth type (i.e: kubernetes)'
+        version:
+          type: string
+          description: Docker image tag (version)
+          default: latest
+        policies:
+          type: array
+          description: Adds additional policies.
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                description: The policy name
+              data:
+                type: string
+                description: The policy rule data
+      description: >
+        This object describes Vault container.
 
 ### preset-request
 
